@@ -2,10 +2,12 @@ import android.content.Context;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.os.Looper;
-import java.io.FileInputStream;
+import java.io.File;
 
 public class Torch {
   public static void main(String[] a) throws Exception {
+    File f = new File(a.length > 0 ? a[0] : "/data/local/tmp/torch.cmd");
+    long last = f.lastModified();
     Looper.prepareMainLooper();
     Class<?> at = Class.forName("android.app.ActivityThread");
     Object t = at.getMethod("systemMain").invoke(null);
@@ -15,20 +17,15 @@ public class Torch {
     for (String s : cm.getCameraIdList())
       if (Boolean.TRUE.equals(cm.getCameraCharacteristics(s)
           .get(CameraCharacteristics.FLASH_INFO_AVAILABLE))) { id = s; break; }
-    String fifo = a.length > 0 ? a[0] : "/data/local/tmp/torch.fifo";
     boolean on = false;
+    try { cm.setTorchMode(id, true); on = true; } catch (Exception e) { }
     while (true) {
-      FileInputStream in = new FileInputStream(fifo);
-      int ch;
-      while ((ch = in.read()) != -1) {
-        boolean want = on;
-        if (ch == 't') want = !on;
-        else if (ch == '1') want = true;
-        else if (ch == '0') want = false;
-        else continue;
-        try { cm.setTorchMode(id, want); on = want; } catch (Exception e) { }
+      Thread.sleep(50);
+      long m = f.lastModified();
+      if (m != last) {
+        last = m;
+        try { cm.setTorchMode(id, !on); on = !on; } catch (Exception e) { }
       }
-      in.close();
     }
   }
 }
