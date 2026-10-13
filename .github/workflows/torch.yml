@@ -9,6 +9,7 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - run: |
           AJ=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -1)
+          mkdir out
           D8=$(ls $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -1)
           javac --release 8 -cp $AJ Torch.java
           $D8 --lib $AJ --output out Torch*.class
