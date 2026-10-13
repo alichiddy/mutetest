@@ -1,0 +1,19 @@
+name: torch
+on: [push, workflow_dispatch]
+jobs:
+  dex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - run: |
+          AJ=$(ls -d $ANDROID_HOME/platforms/android-*/android.jar | sort -V | tail -1)
+          D8=$(ls $ANDROID_HOME/build-tools/*/d8 | sort -V | tail -1)
+          javac --release 8 -cp $AJ Torch.java
+          $D8 --lib $AJ --output out Torch*.class
+          mv out/classes.dex torch.dex
+      - uses: actions/upload-artifact@v4
+        with:
+          name: torch-dex
+          path: torch.dex
