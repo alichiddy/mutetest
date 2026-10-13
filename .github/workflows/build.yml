@@ -1,18 +1,30 @@
-name: build
-on: [push, workflow_dispatch]
+name: Build torch.dex
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
 jobs:
-  apk:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: unzip -q VpnOff.zip
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 17 }
-      - uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: 8.7 }
-      - run: gradle assembleDebug --no-daemon
-        working-directory: VpnOff
-      - uses: actions/upload-artifact@v4
         with:
-          name: vpnoff-apk
-          path: VpnOff/app/build/outputs/apk/debug/app-debug.apk
+          distribution: temurin
+          java-version: '17'
+      - name: Get Android tools
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-31" "build-tools;34.0.0" > /dev/null
+      - name: Compile
+        run: |
+          AJ=$ANDROID_HOME/platforms/android-31/android.jar
+          javac --release 8 -cp $AJ Torch.java
+          $ANDROID_HOME/build-tools/34.0.0/d8 --lib $AJ --output out Torch*.class
+          mv out/classes.dex torch.dex
+      - name: Save torch.dex into the repo
+        run: |
+          git config user.name build
+          git config user.email build@example.com
+          git add torch.dex
+          git commit -m "Add torch.dex"
+          git push
