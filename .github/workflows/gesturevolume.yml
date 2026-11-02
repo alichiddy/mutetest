@@ -1,0 +1,38 @@
+name: Build GestureVolume
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'GestureVolume.zip'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: unzip -q GestureVolume.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Dummy secrets (ads are switched off with -PnoAds)
+        working-directory: GestureVolume
+        run: |
+          cat > local.properties <<'EOF'
+          APPLOVIN_SDK_KEY=dummy
+          AD_UNIT_BANNER=dummy
+          AD_UNIT_INTERSTITIAL=dummy
+          AD_UNIT_NATIVE=dummy
+          AD_UNIT_APP_OPEN=dummy
+          PRODUCT_LIFETIME=dummy
+          EOF
+      - name: Build
+        working-directory: GestureVolume
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon -PnoAds -Psideload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GestureVolume
+          path: GestureVolume/app/build/outputs/apk/debug/app-debug.apk
