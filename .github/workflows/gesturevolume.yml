@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
       - name: Use the newest zip uploaded to the gv release (phone upload)
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -21,7 +23,30 @@ jobs:
           if [ -n "$N" ]; then
             gh release download gv -R "$R" --pattern "$N" --output GestureVolume.zip --clobber
             for A in $(gh release view gv -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) continue;; esac
               gh release delete-asset gv "$A" -R "$R" -y || true
+            done
+          fi
+      - name: Install a new workflow file uploaded to the gv release (needs the WORKFLOW_PAT secret)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          Y=$(gh release view gv -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".yml"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
+            gh release download gv -R "$R" --pattern "$Y" --output new.yml --clobber
+            if ! cmp -s new.yml .github/workflows/gesturevolume.yml; then
+              cp new.yml .github/workflows/gesturevolume.yml
+              git config user.name "gv-bot"; git config user.email "gv-bot@users.noreply.github.com"
+              git add .github/workflows/gesturevolume.yml
+              git commit -m "Update gesturevolume.yml from phone upload"
+              git push
+            fi
+            rm -f new.yml
+            for A in $(gh release view gv -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) gh release delete-asset gv "$A" -R "$R" -y || true;; esac
             done
           fi
       - run: unzip -q GestureVolume.zip
@@ -47,7 +72,7 @@ jobs:
         working-directory: GestureVolume
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PnoAds -Psideload
+          ./gradlew assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: GestureVolume
