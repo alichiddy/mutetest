@@ -1,0 +1,50 @@
+name: Build LeanTypeA
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'LeanTypeA.zip'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the newest zip uploaded to the lt release (phone upload)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          N=$(gh release view lt -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$N" ]; then
+            gh release download lt -R "$R" --pattern "$N" --output LeanTypeA.zip --clobber
+            for A in $(gh release view lt -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) continue;; esac
+              gh release delete-asset lt "$A" -R "$R" -y || true
+            done
+          fi
+      - run: unzip -q LeanTypeA.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build
+        working-directory: LeanTypeA
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleOfflineRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LeanTypeA
+          path: LeanTypeA/app/build/outputs/apk/offline/release/*.apk
+      - name: Publish the APK to the lt release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls LeanTypeA/app/build/outputs/apk/offline/release/*.apk | head -1)
+          gh release upload lt "$APK#LeanType.apk" --clobber -R "$GITHUB_REPOSITORY"
