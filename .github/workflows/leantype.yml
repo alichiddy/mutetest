@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
       - name: Use the newest zip uploaded to the lt release (phone upload)
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -23,6 +25,28 @@ jobs:
             for A in $(gh release view lt -R "$R" --json assets --jq '.assets[].name'); do
               case "$A" in *.yml) continue;; esac
               gh release delete-asset lt "$A" -R "$R" -y || true
+            done
+          fi
+      - name: Install a new workflow file uploaded to the lt release (needs the WORKFLOW_PAT secret)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          Y=$(gh release view lt -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".yml"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
+            gh release download lt -R "$R" --pattern "$Y" --output new.yml --clobber
+            if ! cmp -s new.yml .github/workflows/leantype.yml; then
+              cp new.yml .github/workflows/leantype.yml
+              git config user.name "gv-bot"; git config user.email "gv-bot@users.noreply.github.com"
+              git add .github/workflows/leantype.yml
+              git commit -m "Update leantype.yml from phone upload"
+              git push
+            fi
+            rm -f new.yml
+            for A in $(gh release view lt -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) gh release delete-asset lt "$A" -R "$R" -y || true;; esac
             done
           fi
       - run: unzip -q LeanTypeA.zip
@@ -47,4 +71,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           APK=$(ls LeanTypeA/app/build/outputs/apk/offline/release/*.apk | head -1)
+          gh release view lt -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || gh release create lt --title lt --notes "LeanType A builds" --prerelease -R "$GITHUB_REPOSITORY"
           gh release upload lt "$APK#LeanType.apk" --clobber -R "$GITHUB_REPOSITORY"
