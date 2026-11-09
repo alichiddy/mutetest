@@ -1,0 +1,148 @@
+name: Build BlackBox
+# Same logic as gesturevolume.yml, with its own names:
+#   workflow file : .github/workflows/blackbox.yml
+#   zip name      : BlackBox.zip  (must contain a top-level folder called BlackBox/)
+#   release tag   : bb            (upload zips/yml here from your phone, then Run workflow)
+#   APK name      : BlackBox.apk
+#
+# SIGNATURE: blackbox.keystore (repo root) is the permanent signing key.
+#   1) The APK is signed with it, so every build installs over the previous one.
+#   2) It is copied INSIDE the app (assets/blackbox.keystore) so the in-app
+#      "Make APK" option can sign exported APKs with the same key.
+#   Keystore alias: blackbox   Password: blackbox123
+#
+# FIRST RUN: if there is no BlackBox.zip anywhere, the open-source engine
+#   (ALEX5402/NewBlackbox) is cloned and used as the base. The full source is
+#   attached as the "BlackBox-source" artifact so it can be sent for editing.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BlackBox.zip'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+
+      - name: Make sure the bb release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view bb -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create bb -R "$GITHUB_REPOSITORY" -t "bb" -n "BlackBox builds"
+
+      - name: Use the newest zip uploaded to the bb release (phone upload)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          N=$(gh release view bb -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$N" ]; then
+            gh release download bb -R "$R" --pattern "$N" --output BlackBox.zip --clobber
+            for A in $(gh release view bb -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml|*.keystore|*.apk) continue;; esac
+              gh release delete-asset bb "$A" -R "$R" -y || true
+            done
+          fi
+
+      - name: Install a new workflow file uploaded to the bb release (needs the WORKFLOW_PAT secret)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          Y=$(gh release view bb -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".yml"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
+            gh release download bb -R "$R" --pattern "$Y" --output new.yml --clobber
+            if ! cmp -s new.yml .github/workflows/blackbox.yml; then
+              cp new.yml .github/workflows/blackbox.yml
+              git config user.name "bb-bot"; git config user.email "bb-bot@users.noreply.github.com"
+              git add .github/workflows/blackbox.yml
+              git commit -m "Update blackbox.yml from phone upload"
+              git push
+            fi
+            rm -f new.yml
+            for A in $(gh release view bb -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) gh release delete-asset bb "$A" -R "$R" -y || true;; esac
+            done
+          fi
+
+      - name: Unzip project (or clone the open-source base on first run)
+        run: |
+          if [ -f BlackBox.zip ]; then
+            unzip -q BlackBox.zip
+          else
+            echo "No BlackBox.zip found: cloning NewBlackbox as the base"
+            git clone --depth 1 https://github.com/ALEX5402/NewBlackbox.git BlackBox
+            rm -rf BlackBox/.git
+          fi
+          ls BlackBox
+
+      - name: Set package name to b.b (app name stays BlackBox)
+        working-directory: BlackBox
+        run: |
+          F=$(ls app/build.gradle app/build.gradle.kts 2>/dev/null | head -1)
+          echo "Using $F"
+          sed -i -E 's/applicationId( =)? *"[^"]+"/applicationId = "b.b"/' "$F"
+          grep -n applicationId "$F" || true
+
+      - name: Put the signing key inside the app
+        run: |
+          if [ ! -f blackbox.keystore ]; then
+            echo "blackbox.keystore missing in repo root: creating one (commit it so the signature stays the same)"
+            keytool -genkeypair -keystore blackbox.keystore -storetype PKCS12 -storepass blackbox123 -keypass blackbox123 -alias blackbox -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=BlackBox, O=BlackBox, C=US"
+          fi
+          mkdir -p BlackBox/app/src/main/assets
+          cp blackbox.keystore BlackBox/app/src/main/assets/blackbox.keystore
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install SDK and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" "ndk;29.0.13846066" "cmake;3.22.1" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        working-directory: BlackBox
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon -Pandroid.ndkVersion=29.0.13846066 -PbuildNo=${{ github.run_number }}
+
+      - name: Sign with the built-in key
+        run: |
+          APK=$(find BlackBox -name "*.apk" -path "*release*" | head -1)
+          echo "Built: $APK"
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/zipalign" -f -p 4 "$APK" aligned.apk
+          "$BT/apksigner" sign --ks blackbox.keystore --ks-pass pass:blackbox123 --key-pass pass:blackbox123 --ks-key-alias blackbox --out BlackBox.apk aligned.apk
+          "$BT/apksigner" verify --print-certs BlackBox.apk | head -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlackBox
+          path: BlackBox.apk
+
+      - name: Zip the source so it can be sent for editing
+        run: zip -q -r BlackBox-source.zip BlackBox -x "BlackBox/**/build/*" "BlackBox/.gradle/*"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlackBox-source
+          path: BlackBox-source.zip
+
+      - name: Publish the APK to the bb release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload bb BlackBox.apk --clobber -R "$GITHUB_REPOSITORY"
