@@ -12,10 +12,19 @@ name: Build BlackBox
 #   Keystore alias: blackbox   Password: blackbox123
 #
 # FIRST RUN: if there is no BlackBox.zip anywhere, the open-source engine
-#   (ALEX5402/NewBlackbox) is cloned and used as the base. The full source is
-#   attached as the "BlackBox-source" artifact so it can be sent for editing.
+#   (ALEX5402/NewBlackbox) is cloned and used as the base.
 on:
   workflow_dispatch:
+    inputs:
+      variant:
+        description: 'Build type (debug = no code shrinking, good for finding bugs)'
+        default: 'release'
+        type: choice
+        options: [release, debug]
+      pkg:
+        description: 'Package name'
+        default: 'a.b'
+        type: string
   push:
     paths:
       - 'BlackBox.zip'
@@ -84,13 +93,18 @@ jobs:
           fi
           ls BlackBox
 
-      - name: Set package name to b.b (app name stays BlackBox)
+      - name: Set package name to a.b and app name to AB
         working-directory: BlackBox
+        env:
+          PKG: ${{ inputs.pkg || 'a.b' }}
         run: |
           F=$(ls app/build.gradle app/build.gradle.kts 2>/dev/null | head -1)
           echo "Using $F"
-          sed -i -E 's/applicationId( =)? *"[^"]+"/applicationId = "b.b"/' "$F"
+          sed -i -E "s/applicationId( =)? *\"[^\"]+\"/applicationId = \"$PKG\"/" "$F"
           grep -n applicationId "$F" || true
+          # App name shown on the phone: AB
+          grep -rl 'name="app_name"' app/src/main/res | xargs sed -i -E 's#(<string name="app_name"[^>]*>)[^<]*#\1AB#'
+          grep -rn 'name="app_name"' app/src/main/res
 
       - name: Put the signing key inside the app
         run: |
@@ -115,13 +129,17 @@ jobs:
 
       - name: Build
         working-directory: BlackBox
+        env:
+          VARIANT: ${{ inputs.variant || 'release' }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -Pandroid.ndkVersion=29.0.13846066 -PbuildNo=${{ github.run_number }}
+          if [ "$VARIANT" = "debug" ]; then T=assembleDebug; else T=assembleRelease; fi
+          ./gradlew $T --no-daemon -Pandroid.ndkVersion=29.0.13846066 -PbuildNo=${{ github.run_number }}
 
       - name: Sign with the built-in key
         run: |
-          APK=$(find BlackBox -name "*.apk" -path "*release*" | head -1)
+          APK=$(find BlackBox -name "*universal*.apk" | head -1)
+          [ -z "$APK" ] && APK=$(find BlackBox -name "*.apk" -path "*outputs*" | head -1)
           echo "Built: $APK"
           BT="$ANDROID_HOME/build-tools/34.0.0"
           "$BT/zipalign" -f -p 4 "$APK" aligned.apk
@@ -132,14 +150,6 @@ jobs:
         with:
           name: BlackBox
           path: BlackBox.apk
-
-      - name: Zip the source so it can be sent for editing
-        run: zip -q -r BlackBox-source.zip BlackBox -x "BlackBox/**/build/*" "BlackBox/.gradle/*"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: BlackBox-source
-          path: BlackBox-source.zip
 
       - name: Publish the APK to the bb release (direct download link)
         env:
