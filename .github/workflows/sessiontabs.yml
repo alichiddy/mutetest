@@ -1,0 +1,90 @@
+name: Build SessionTabs
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'SessionTabs.zip'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      # Uses the first release that exists: ar, AR or st (created as "ar" if none exists)
+      - name: Pick release tag
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          T=ar
+          for C in ar AR st; do
+            if gh release view "$C" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then T="$C"; break; fi
+          done
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+      # Only ever touches an asset named exactly SessionTabs.zip, so other apps' files are ignored
+      - name: Use SessionTabs.zip uploaded to the release (phone upload)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REL: ${{ steps.rel.outputs.tag }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          N=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name == "SessionTabs.zip")] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$N" ]; then
+            gh release download "$REL" -R "$R" --pattern "$N" --output SessionTabs.zip --clobber
+            gh release delete-asset "$REL" "$N" -R "$R" -y || true
+          fi
+      # Only ever installs an asset named exactly sessiontabs.yml (needs the WORKFLOW_PAT secret)
+      - name: Install sessiontabs.yml uploaded to the release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+          REL: ${{ steps.rel.outputs.tag }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          Y=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name == "sessiontabs.yml")] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
+            gh release download "$REL" -R "$R" --pattern "$Y" --output new.yml --clobber
+            if head -n1 new.yml | grep -q '^name: Build SessionTabs' && ! cmp -s new.yml .github/workflows/sessiontabs.yml; then
+              cp new.yml .github/workflows/sessiontabs.yml
+              git config user.name "st-bot"; git config user.email "st-bot@users.noreply.github.com"
+              git add .github/workflows/sessiontabs.yml
+              git commit -m "Update sessiontabs.yml from phone upload"
+              git push
+            fi
+            rm -f new.yml
+            gh release delete-asset "$REL" "$Y" -R "$R" -y || true
+          fi
+      - name: Unzip
+        run: |
+          test -f SessionTabs.zip || { echo "SessionTabs.zip not found in repo root or release"; exit 1; }
+          unzip -q SessionTabs.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      # The zip has no Gradle wrapper, so install Gradle directly (AGP 8.5.2 needs 8.7+)
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build
+        working-directory: SessionTabs
+        run: gradle assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SessionTabs
+          path: SessionTabs/app/build/outputs/apk/release/app-release.apk
+      - name: Publish the APK to the release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REL: ${{ steps.rel.outputs.tag }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          gh release view "$REL" -R "$R" >/dev/null 2>&1 || gh release create "$REL" -R "$R" --title "AR" --notes "AR builds and phone uploads"
+          gh release upload "$REL" "SessionTabs/app/build/outputs/apk/release/app-release.apk#AR.apk" --clobber -R "$R"
