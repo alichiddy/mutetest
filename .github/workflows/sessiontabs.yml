@@ -24,21 +24,25 @@ jobs:
             if gh release view "$C" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then T="$C"; break; fi
           done
           echo "tag=$T" >> "$GITHUB_OUTPUT"
-      # Only ever touches an asset named exactly SessionTabs.zip, so other apps' files are ignored
-      - name: Use SessionTabs.zip uploaded to the release (phone upload)
+      # Accepts SessionTabs.zip even if the phone renamed it (SessionTabs (1).zip, SessionTabs-2.zip ...)
+      # Only touches assets whose name starts with "SessionTabs" and ends with .zip
+      - name: Use SessionTabs zip uploaded to the release (phone upload)
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           REL: ${{ steps.rel.outputs.tag }}
         run: |
           R="$GITHUB_REPOSITORY"
-          N=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name == "SessionTabs.zip")] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          LIST=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name | test("^SessionTabs.*\\.zip$"; "i"))] | sort_by(.createdAt)' 2>/dev/null || echo '[]')
+          N=$(echo "$LIST" | jq -r 'last | .name // empty')
           if [ -n "$N" ]; then
             gh release download "$REL" -R "$R" --pattern "$N" --output SessionTabs.zip --clobber
-            gh release delete-asset "$REL" "$N" -R "$R" -y || true
+            echo "$LIST" | jq -r '.[].name' | while IFS= read -r A; do
+              gh release delete-asset "$REL" "$A" -R "$R" -y || true
+            done
           fi
-      # Only ever installs an asset named exactly sessiontabs.yml (needs the WORKFLOW_PAT secret)
-      - name: Install sessiontabs.yml uploaded to the release
+      # Accepts sessiontabs.yml even if renamed (sessiontabs (1).yml ...); needs the WORKFLOW_PAT secret
+      - name: Install sessiontabs yml uploaded to the release
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,7 +50,8 @@ jobs:
           REL: ${{ steps.rel.outputs.tag }}
         run: |
           R="$GITHUB_REPOSITORY"
-          Y=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name == "sessiontabs.yml")] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          LIST=$(gh release view "$REL" -R "$R" --json assets --jq '[.assets[] | select(.name | test("^sessiontabs.*\\.yml$"; "i"))] | sort_by(.createdAt)' 2>/dev/null || echo '[]')
+          Y=$(echo "$LIST" | jq -r 'last | .name // empty')
           if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
             gh release download "$REL" -R "$R" --pattern "$Y" --output new.yml --clobber
             if head -n1 new.yml | grep -q '^name: Build SessionTabs' && ! cmp -s new.yml .github/workflows/sessiontabs.yml; then
@@ -57,7 +62,9 @@ jobs:
               git push
             fi
             rm -f new.yml
-            gh release delete-asset "$REL" "$Y" -R "$R" -y || true
+            echo "$LIST" | jq -r '.[].name' | while IFS= read -r A; do
+              gh release delete-asset "$REL" "$A" -R "$R" -y || true
+            done
           fi
       - name: Unzip
         run: |
