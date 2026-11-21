@@ -1,0 +1,74 @@
+name: Build Authenticator
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Authenticator.zip'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.WORKFLOW_PAT || github.token }}
+      - name: Use the newest zip uploaded to the au release (phone upload)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          N=$(gh release view au -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$N" ]; then
+            gh release download au -R "$R" --pattern "$N" --output Authenticator.zip --clobber
+            for A in $(gh release view au -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) continue;; esac
+              gh release delete-asset au "$A" -R "$R" -y || true
+            done
+          fi
+      - name: Install a new workflow file uploaded to the au release (needs the WORKFLOW_PAT secret)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_PAT: ${{ secrets.WORKFLOW_PAT != '' }}
+        run: |
+          R="$GITHUB_REPOSITORY"
+          Y=$(gh release view au -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".yml"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
+          if [ -n "$Y" ] && [ "$HAS_PAT" = "true" ]; then
+            gh release download au -R "$R" --pattern "$Y" --output new.yml --clobber
+            if ! cmp -s new.yml .github/workflows/authenticator.yml; then
+              cp new.yml .github/workflows/authenticator.yml
+              git config user.name "au-bot"; git config user.email "au-bot@users.noreply.github.com"
+              git add .github/workflows/authenticator.yml
+              git commit -m "Update authenticator.yml from phone upload"
+              git push
+            fi
+            rm -f new.yml
+            for A in $(gh release view au -R "$R" --json assets --jq '.assets[].name'); do
+              case "$A" in *.yml) gh release delete-asset au "$A" -R "$R" -y || true;; esac
+            done
+          fi
+      - run: unzip -q Authenticator.zip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build
+        working-directory: Authenticator
+        run: gradle assembleRelease --no-daemon -PbuildNo=${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Authenticator
+          path: Authenticator/app/build/outputs/apk/release/app-release.apk
+      - name: Publish the APK to the au release (direct download link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view au -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create au -R "$GITHUB_REPOSITORY" -t "Authenticator" -n "Authenticator builds"
+          gh release upload au "Authenticator/app/build/outputs/apk/release/app-release.apk#Authenticator.apk" --clobber -R "$GITHUB_REPOSITORY"
