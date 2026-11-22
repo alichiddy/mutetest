@@ -1,0 +1,63 @@
+name: Build ShortcutMaker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shortcutmaker
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: gv
+      NAME: ShortcutMaker
+    steps:
+      - name: Take the zip from the release
+        run: |
+          mkdir -p work
+          cd work
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME.zip" --clobber
+          # The phone sees the zip is gone and knows the build took it.
+          gh release delete-asset "$TAG" "$NAME.zip" --repo "$GITHUB_REPOSITORY" --yes || true
+          unzip -q "$NAME.zip"
+          rm "$NAME.zip"
+          SETTINGS=$(find . -maxdepth 2 -name settings.gradle.kts | head -1)
+          test -n "$SETTINGS" || { echo "No settings.gradle.kts in the zip"; exit 1; }
+          echo "DIR=$PWD/$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Accept the Android licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Build
+        working-directory: ${{ env.DIR }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleRelease -PbuildNo=${{ github.run_number }}
+
+      - name: Name the APK
+        run: |
+          APK=$(find "$DIR/app/build/outputs/apk/release" -name '*.apk' | head -1)
+          test -n "$APK" || { echo "No APK was built"; exit 1; }
+          cp "$APK" "$GITHUB_WORKSPACE/$NAME.apk"
+          ls -l "$GITHUB_WORKSPACE/$NAME.apk"
+
+      - name: Put the APK on the release
+        run: gh release upload "$TAG" "$GITHUB_WORKSPACE/$NAME.apk" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShortcutMaker
+          path: ${{ github.workspace }}/ShortcutMaker.apk
+          retention-days: 7
