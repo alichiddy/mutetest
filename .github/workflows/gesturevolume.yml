@@ -19,6 +19,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           R="$GITHUB_REPOSITORY"
+          cp GestureVolume.zip base_full.zip
           N=$(gh release view gv -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
           if [ -n "$N" ]; then
             gh release download gv -R "$R" --pattern "$N" --output GestureVolume.zip --clobber
@@ -51,7 +52,14 @@ jobs:
           fi
       - name: Extract the canonical B360 project
         run: |
-          unzip -q GestureVolume.zip
+          if unzip -l GestureVolume.zip | grep -q 'GestureVolume/gradlew$'; then
+            unzip -q GestureVolume.zip
+          else
+            echo "Uploaded zip is a partial (edited files only): overlaying it on the full project in the repo."
+            unzip -l GestureVolume.zip | tail -n +4 | head -n -2
+            unzip -q base_full.zip
+            unzip -q -o GestureVolume.zip
+          fi
           test -f GestureVolume/gradlew
           test -f GestureVolume/gradle/wrapper/gradle-wrapper.jar
           test -f GestureVolume/debug.keystore
