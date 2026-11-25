@@ -22,10 +22,9 @@ jobs:
           N=$(gh release view gv -R "$R" --json assets --jq '[.assets[] | select(.name | endswith(".zip"))] | sort_by(.createdAt) | last | .name // empty' 2>/dev/null || true)
           if [ -n "$N" ]; then
             gh release download gv -R "$R" --pattern "$N" --output GestureVolume.zip --clobber
-            for A in $(gh release view gv -R "$R" --json assets --jq '.assets[].name'); do
-              case "$A" in *.yml) continue;; esac
-              gh release delete-asset gv "$A" -R "$R" -y || true
-            done
+            echo "Downloaded source asset: $N"
+            ls -lh GestureVolume.zip
+            sha256sum GestureVolume.zip
           fi
       - name: Install a new workflow file uploaded to the gv release (needs the WORKFLOW_PAT secret)
         if: github.event_name == 'workflow_dispatch'
@@ -51,8 +50,12 @@ jobs:
           fi
       - name: Extract the canonical B364 project
         run: |
-          if ! unzip -tq GestureVolume.zip >/dev/null 2>&1; then
-            echo "::error::GestureVolume.zip is corrupt or structurally invalid. Upload a fresh, complete B364 ZIP to the gv release; partial ZIPs are not accepted."
+          echo "Checking uploaded B364 source archive..."
+          file GestureVolume.zip
+          ls -lh GestureVolume.zip
+          sha256sum GestureVolume.zip
+          if ! unzip -t GestureVolume.zip; then
+            echo "::error::The uploaded GestureVolume.zip failed ZIP integrity validation. The unzip diagnostic above identifies the exact archive error. The release asset has been preserved."
             exit 1
           fi
           if ! unzip -Z1 GestureVolume.zip | grep -qx 'GestureVolume/gradlew'; then
