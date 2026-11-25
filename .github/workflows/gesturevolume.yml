@@ -70,6 +70,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Prepare stable release signing key
+        working-directory: GestureVolume
+        run: |
+          if [ ! -f debug.keystore ]; then
+            echo "::error::The project ZIP must include the existing debug.keystore to preserve the app's signing identity."
+            exit 1
+          fi
+          keytool -importkeystore \
+            -srckeystore debug.keystore -srcstoretype PKCS12 \
+            -srcstorepass android -srcalias androiddebugkey -srckeypass android \
+            -destkeystore my-upload-key.jks -deststoretype PKCS12 \
+            -deststorepass android -destalias upload -destkeypass android -noprompt
+          echo "Imported existing signing key; checking certificate fingerprint:"
+          keytool -list -v -keystore my-upload-key.jks -storepass android | grep -E 'Alias name:|SHA256:'
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
@@ -88,6 +102,10 @@ jobs:
           EOF
       - name: Build
         working-directory: GestureVolume
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/GestureVolume/my-upload-key.jks
+          STORE_PASSWORD: android
+          KEY_PASSWORD: android
         run: |
           if [ -f gradlew ]; then
             chmod +x gradlew
