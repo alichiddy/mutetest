@@ -49,10 +49,23 @@ jobs:
               case "$A" in *.yml) gh release delete-asset gv "$A" -R "$R" -y || true;; esac
             done
           fi
-      - name: Extract project
+      - name: Extract project (supports B360 and Gemini ZIP layouts)
         run: |
-          mkdir -p GestureVolume
-          unzip -q GestureVolume.zip -d GestureVolume
+          mkdir -p _gv_extract GestureVolume
+          unzip -q GestureVolume.zip -d _gv_extract
+          if [ -f _gv_extract/GestureVolume/build.gradle.kts ]; then
+            cp -a _gv_extract/GestureVolume/. GestureVolume/
+          elif [ -f _gv_extract/build.gradle.kts ]; then
+            cp -a _gv_extract/. GestureVolume/
+          else
+            echo "::error::ZIP does not contain a Gradle project at its root or GestureVolume/"
+            find _gv_extract -maxdepth 3 -type f | head -80
+            exit 1
+          fi
+          test -f GestureVolume/settings.gradle.kts
+          test -f GestureVolume/app/build.gradle.kts
+          echo "Project root: GestureVolume/"
+          if [ -f GestureVolume/gradlew ]; then echo "Gradle wrapper: present"; else echo "Gradle wrapper: absent; using installed Gradle"; fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -76,7 +89,12 @@ jobs:
       - name: Build
         working-directory: GestureVolume
         run: |
-          gradle assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
+          else
+            gradle assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: GestureVolume
