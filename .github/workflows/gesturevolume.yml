@@ -49,7 +49,10 @@ jobs:
               case "$A" in *.yml) gh release delete-asset gv "$A" -R "$R" -y || true;; esac
             done
           fi
-      - run: unzip -q GestureVolume.zip
+      - name: Extract project
+        run: |
+          mkdir -p GestureVolume
+          unzip -q GestureVolume.zip -d GestureVolume
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -57,6 +60,8 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
       - name: Dummy secrets (ads are switched off with -PnoAds)
         working-directory: GestureVolume
         run: |
@@ -71,8 +76,7 @@ jobs:
       - name: Build
         working-directory: GestureVolume
         run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
+          gradle assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: GestureVolume
