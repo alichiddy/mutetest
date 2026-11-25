@@ -52,19 +52,25 @@ jobs:
           fi
       - name: Extract the canonical B360 project
         run: |
-          if unzip -l GestureVolume.zip | grep -q 'GestureVolume/gradlew$'; then
-            unzip -q GestureVolume.zip
+          if unzip -tq GestureVolume.zip >/dev/null 2>&1; then
+            if unzip -Z1 GestureVolume.zip | grep -qx 'GestureVolume/gradlew'; then
+              echo "Uploaded ZIP is a complete, valid project."
+              unzip -q GestureVolume.zip
+            else
+              echo "Uploaded ZIP is a valid partial patch: overlaying it on the repository project."
+              unzip -q base_full.zip
+              unzip -q -o GestureVolume.zip
+            fi
           else
-            echo "Uploaded zip is a partial (edited files only): overlaying it on the full project in the repo."
-            unzip -l GestureVolume.zip | tail -n +4 | head -n -2
+            echo "::warning::Uploaded ZIP is damaged. Restoring the repository project first, then overlaying recoverable files while preserving its known-good debug.keystore."
             unzip -q base_full.zip
-            unzip -q -o GestureVolume.zip
+            unzip -q -o GestureVolume.zip -x 'GestureVolume/debug.keystore'
           fi
           test -f GestureVolume/gradlew
           test -f GestureVolume/gradle/wrapper/gradle-wrapper.jar
           test -f GestureVolume/debug.keystore
           test -f GestureVolume/app/build.gradle.kts
-          echo "B360 project layout and bundled signing key verified."
+          echo "B360 project layout and repository signing key verified."
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
