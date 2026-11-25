@@ -49,41 +49,18 @@ jobs:
               case "$A" in *.yml) gh release delete-asset gv "$A" -R "$R" -y || true;; esac
             done
           fi
-      - name: Extract project (supports B360 and Gemini ZIP layouts)
+      - name: Extract the canonical B360 project
         run: |
-          mkdir -p _gv_extract GestureVolume
-          unzip -q GestureVolume.zip -d _gv_extract
-          if [ -f _gv_extract/GestureVolume/build.gradle.kts ]; then
-            cp -a _gv_extract/GestureVolume/. GestureVolume/
-          elif [ -f _gv_extract/build.gradle.kts ]; then
-            cp -a _gv_extract/. GestureVolume/
-          else
-            echo "::error::ZIP does not contain a Gradle project at its root or GestureVolume/"
-            find _gv_extract -maxdepth 3 -type f | head -80
-            exit 1
-          fi
-          test -f GestureVolume/settings.gradle.kts
+          unzip -q GestureVolume.zip
+          test -f GestureVolume/gradlew
+          test -f GestureVolume/gradle/wrapper/gradle-wrapper.jar
+          test -f GestureVolume/debug.keystore
           test -f GestureVolume/app/build.gradle.kts
-          echo "Project root: GestureVolume/"
-          if [ -f GestureVolume/gradlew ]; then echo "Gradle wrapper: present"; else echo "Gradle wrapper: absent; using installed Gradle"; fi
+          echo "B360 project layout and bundled signing key verified."
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - name: Prepare stable release signing key
-        working-directory: GestureVolume
-        run: |
-          if [ ! -f debug.keystore ]; then
-            echo "::error::The project ZIP must include the existing debug.keystore to preserve the app's signing identity."
-            exit 1
-          fi
-          keytool -importkeystore \
-            -srckeystore debug.keystore -srcstoretype PKCS12 \
-            -srcstorepass android -srcalias androiddebugkey -srckeypass android \
-            -destkeystore my-upload-key.jks -deststoretype PKCS12 \
-            -deststorepass android -destalias upload -destkeypass android -noprompt
-          echo "Imported existing signing key; checking certificate fingerprint:"
-          keytool -list -v -keystore my-upload-key.jks -storepass android | grep -E 'Alias name:|SHA256:'
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
@@ -102,10 +79,6 @@ jobs:
           EOF
       - name: Build
         working-directory: GestureVolume
-        env:
-          KEYSTORE_PATH: ${{ github.workspace }}/GestureVolume/my-upload-key.jks
-          STORE_PASSWORD: android
-          KEY_PASSWORD: android
         run: |
           if [ -f gradlew ]; then
             chmod +x gradlew
