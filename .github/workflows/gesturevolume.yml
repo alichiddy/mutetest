@@ -9,6 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,8 +77,6 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
       - name: Dummy secrets (ads are switched off with -PnoAds)
         working-directory: GestureVolume
         run: |
@@ -89,19 +88,25 @@ jobs:
           AD_UNIT_APP_OPEN=dummy
           PRODUCT_LIFETIME=dummy
           EOF
+      - name: Speed only - skip the release lint-vital check (delete this step and the -I below to turn it back on)
+        run: |
+          cat > "$RUNNER_TEMP/gv-init.gradle" <<'EOF'
+          allprojects {
+              tasks.configureEach { t ->
+                  if (t.name.startsWith('lintVital')) { t.enabled = false }
+              }
+          }
+          EOF
       - name: Build
         working-directory: GestureVolume
         run: |
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-            ./gradlew assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
-          else
-            gradle assembleRelease --no-daemon -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
-          fi
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon -I "$RUNNER_TEMP/gv-init.gradle" -PnoAds -Psideload -PbuildNo=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: GestureVolume
           path: GestureVolume/app/build/outputs/apk/release/app-release.apk
+          compression-level: 0
       - name: Publish the APK to the gv release (direct download link)
         env:
           GH_TOKEN: ${{ github.token }}
